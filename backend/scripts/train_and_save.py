@@ -60,18 +60,29 @@ def train_from_csv(csv_path: str) -> None:
     bigrams = Counter()
     for text in corpus:
         bigrams.update(zip(text, text[1:]))
-    # группируем в {prev: {next: count}}, отбрасывая редкие биграммы
+    # {prev: {next: count}} — фолбэк, когда 2-словного контекста нет в статистике
     bigram_map: dict = {}
     for (prev, nxt), c in bigrams.items():
         if c >= MIN_NGRAM_FREQ:
             bigram_map.setdefault(prev, {})[nxt] = c
-    n_contexts = len(bigram_map)
-    print(f'Биграмм: {n_contexts} контекстов (частота >= {MIN_NGRAM_FREQ})')
-    del corpus, bigrams
+    print(f'Биграмм: {len(bigram_map)} контекстов (частота >= {MIN_NGRAM_FREQ})')
+    del bigrams
+
+    # 2-словные контексты: {"w1 w2": {next: count}} — семантика домашки (n=2)
+    tri = Counter()
+    for text in corpus:
+        tri.update(zip(text, text[1:], text[2:]))
+    ctx2_map: dict = {}
+    for (w1, w2, nxt), c in tri.items():
+        if c >= MIN_NGRAM_FREQ:
+            ctx2_map.setdefault(f'{w1} {w2}', {})[nxt] = c
+    print(f'2-словных контекстов: {len(ctx2_map)} (частота >= {MIN_NGRAM_FREQ})')
+    del corpus, tri
 
     os.makedirs(DATA_DIR, exist_ok=True)
     save_json_gz(os.path.join(DATA_DIR, 'vocab.json.gz'), word_counts)
     save_json_gz(os.path.join(DATA_DIR, 'bigrams.json.gz'), bigram_map)
+    save_json_gz(os.path.join(DATA_DIR, 'contexts2.json.gz'), ctx2_map)
 
 
 def train_from_parquet(word_table: str, bigram_table: str) -> None:

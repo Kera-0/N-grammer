@@ -65,17 +65,19 @@ class WordCompletor:
 class NGramLanguageModel:
     """N-граммная модель: распределение следующего слова по контексту.
 
-    Семантика домашки: контекст — последние n слов префикса,
-    P(w_i | w_{i-1}, ..., w_{i-n}) оценивается по частоте n-граммы.
+    Семантика домашки: P(w_i | w_{i-1}, ..., w_{i-n}) по частоте n-граммы,
+    то есть контекст — n последних слов префикса, а предсказываем (n+1)-е.
+    Внутреннее хранение: {tuple(context): {next_word: count}}.
     """
 
-    def __init__(self, corpus=None, n: int = 2, ngram_counts: dict = None):
+    def __init__(self, corpus=None, n: int = 2, ngram_counts: dict = None,
+                 contexts_size: int = None):
         self.n = n
         if ngram_counts is not None:
-            # {tuple(context из n слов): {next_word: count}}
-            self.next_words = {k: dict(v) for k, v in ngram_counts.items()}
+            self.next_words = {tuple(k) if not isinstance(k, tuple) else k: dict(v)
+                               for k, v in ngram_counts.items()}
         else:
-            # строим {context (n слов): {next_word: count}} напрямую из корпуса
+            # {context (n слов): {next_word: count}} — считаем из корпуса
             nxt = defaultdict(lambda: defaultdict(int))
             for text in (corpus or []):
                 padded = ['<PAD>'] * n + list(text)

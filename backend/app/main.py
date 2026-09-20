@@ -24,18 +24,31 @@ bigrams = load_json_gz(os.path.join(DATA_DIR, 'bigrams.json.gz'))
 
 word_completor = WordCompletor(word_counts=word_counts)
 
-bigram_model = NGramLanguageModel(n=2)
-for prev, dist in bigrams.items():
-    bigram_model.next_words[(prev,)] = dist
+# основная модель: контекст из 2 слов (семантика n-грамм из задания 4 домашки)
+ctx_model = NGramLanguageModel(n=2)
+ctx2_path = os.path.join(DATA_DIR, 'contexts2.json.gz')
+if os.path.exists(ctx2_path):
+    contexts2 = load_json_gz(ctx2_path)
+    for ctx, dist in contexts2.items():
+        ctx_model.next_words[tuple(ctx.split(' '))] = dist
+else:
+    # фолбэк: 1-словные контексты из биграмм
+    for prev, dist in bigrams.items():
+        ctx_model.next_words[(prev,)] = dist
 
-# триграммная модель опциональна: положите trigrams.json.gz рядом
-trigram_model = None
-trigram_path = os.path.join(DATA_DIR, 'trigrams.json.gz')
-if os.path.exists(trigram_path):
-    trigrams = load_json_gz(trigram_path)
-    trigram_model = NGramLanguageModel(n=3)
-    for ctx, dist in trigrams.items():
-        trigram_model.next_words[tuple(ctx.split(' '))] = dist
+# фолбэк-модель: контекст из 1 слова — срабатывает, когда 2-словного нет
+fallback_model = NGramLanguageModel(n=1)
+for prev, dist in bigrams.items():
+    fallback_model.next_words[(prev,)] = dist
+
+
+def next_words_for(context: list) -> list:
+    """2-словный контекст -> фолбэк на последнее слово."""
+    nxt, _ = ctx_model.get_next_words_and_probs(context)
+    if nxt:
+        return nxt
+    nxt, _ = fallback_model.get_next_words_and_probs(context)
+    return nxt
 
 app = FastAPI(
     title='N-grammer API',
@@ -71,8 +84,8 @@ def health() -> dict:
     return {
         'status': 'ok',
         'vocab_size': len(word_counts),
-        'n_contexts': len(bigram_model.next_words),
-        'trigrams': trigram_model is not None,
+        'n_contexts_2w': len(ctx_model.next_words),
+        'n_contexts_1w': len(fallback_model.next_words),
     }
 
 
@@ -94,10 +107,12 @@ def suggest(req: SuggestRequest) -> SuggestResponse:
             Suggestion(completion=w, words=[w], type='next') for w, _ in top
         ])
 
-    model = trigram_model or bigram_model
     ends_with_space = text.endswith((' ', '\t', '\n'))
     words = text.strip().split()
     out: List[Suggestion] = []
+
+    # контекст для биграммной модели — последнее слово; для триграммной — два
+    continuation = next_words_for
 
     if not ends_with_space:
         # 1) дополняем недописанное слово — топ-k по вероятности
@@ -106,7 +121,7 @@ def suggest(req: SuggestRequest) -> SuggestResponse:
             out.append(Suggestion(completion=f' {w}', words=[w], type='complete'))
         # 2) продолжение для лучшего дополнения
         if cw:
-            nxt, _ = model.get_next_words_and_probs(words[:-1] + [cw[0]])
+            nxt = continuation(words[:-1] + [cw[0]])
             if nxt:
                 chain = [cw[0]] + nxt[:max(req.n_words - 1, 1)]
                 out.append(Suggestion(
@@ -116,13 +131,13 @@ def suggest(req: SuggestRequest) -> SuggestResponse:
                 ))
         return SuggestResponse(suggestions=out[:req.k + 1])
 
-    # 3) слово закончено — продолжаем n-граммами, для каждого варианта докатываем 1-2 слова
-    nxt, _ = model.get_next_words_and_probs(words)
+    # 3) слово закончено — продолжаем n-граммами, для каждого варианта докатываем цепочку
+    nxt = continuation(words)
     for w in nxt[:req.k]:
         chain = [w]
         ctx = words + [w]
         for _ in range(max(req.n_words - 1, 0)):
-            nn, _ = model.get_next_words_and_probs(ctx)
+            nn = continuation(ctx)
             if not nn:
                 break
             ctx = ctx + [nn[0]]
